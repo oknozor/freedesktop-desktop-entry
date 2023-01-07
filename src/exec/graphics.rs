@@ -7,11 +7,6 @@ use std::io;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 
-const VULKAN_ICD_PATH: &str = std::env!(
-    "VULKAN_ICD_PATH",
-    "must define system Vulkan ICD path (ex: `/usr/share/vulkan/icd.d`)"
-);
-
 #[derive(Debug, Default)]
 pub struct Gpus {
     devices: Vec<Dev>,
@@ -92,31 +87,35 @@ impl Dev {
 
     // Lookup vulkan icd files and return the ones matching the driver in use
     fn get_vulkan_icd_paths(&self) -> io::Result<Vec<String>> {
-        let vulkan_icd_paths = dirs::data_dir()
-            .expect("local data dir does not exists")
-            .join("vulkan/icd.d");
+        if let Ok(vulkan_icd_pathvar) = std::env::var("VULKAN_ICD_PATH") {
+            let vulkan_icd_paths = dirs::data_dir()
+                .expect("local data dir does not exists")
+                .join("vulkan/icd.d");
 
-        let vulkan_icd_paths = &[Path::new(VULKAN_ICD_PATH), vulkan_icd_paths.as_path()];
+            let vulkan_icd_paths = &[Path::new(&vulkan_icd_pathvar), vulkan_icd_paths.as_path()];
 
-        let mut icd_paths = vec![];
-        if let Some(driver) = self.driver.as_str() {
-            for path in vulkan_icd_paths {
-                if path.exists() {
-                    for entry in path.read_dir()? {
-                        let entry = entry?;
-                        let path = entry.path();
-                        if path.is_file() {
-                            let path_str = path.to_string_lossy();
-                            if path_str.contains(driver) {
-                                icd_paths.push(path_str.to_string())
+            let mut icd_paths = vec![];
+            if let Some(driver) = self.driver.as_str() {
+                for path in vulkan_icd_paths {
+                    if path.exists() {
+                        for entry in path.read_dir()? {
+                            let entry = entry?;
+                            let path = entry.path();
+                            if path.is_file() {
+                                let path_str = path.to_string_lossy();
+                                if path_str.contains(driver) {
+                                    icd_paths.push(path_str.to_string())
+                                }
                             }
                         }
                     }
                 }
             }
-        }
 
-        Ok(icd_paths)
+            Ok(icd_paths)
+        } else {
+            Ok(vec![])
+        }
     }
 }
 
@@ -171,33 +170,33 @@ fn get_gpus() -> io::Result<HashSet<Dev>> {
     let mut dev_map = HashSet::new();
     let mut drivers: Vec<Dev> = enumerator
         .scan_devices()?
-        .into_iter()
-        .filter(|dev| {
-            dev.devnode()
-                .map(|path| path.starts_with("/dev/dri"))
-                .unwrap_or(false)
-        })
-        .filter_map(|dev| {
-            dev.parent().and_then(|parent| {
-                let id = dev.sysnum();
-                let parent_path = parent.syspath().to_path_buf();
-                let driver = parent.driver().map(|d| d.to_string_lossy().to_string());
-                let driver = Driver::from_udev(driver);
+    .into_iter()
+    .filter(|dev| {
+        dev.devnode()
+           .map(|path| path.starts_with("/dev/dri"))
+           .unwrap_or(false)
+    })
+    .filter_map(|dev| {
+        dev.parent().and_then(|parent| {
+            let id = dev.sysnum();
+            let parent_path = parent.syspath().to_path_buf();
+            let driver = parent.driver().map(|d| d.to_string_lossy().to_string());
+            let driver = Driver::from_udev(driver);
 
-                let is_default = parent
-                    .attribute_value("boot_vga")
-                    .map(|v| v == "1")
-                    .unwrap_or(false);
+            let is_default = parent
+                .attribute_value("boot_vga")
+                .map(|v| v == "1")
+                .unwrap_or(false);
 
-                id.map(|id| Dev {
-                    id,
-                    driver,
-                    is_default,
-                    parent_path,
-                })
+            id.map(|id| Dev {
+                id,
+                driver,
+                is_default,
+                parent_path,
             })
         })
-        .collect();
+    })
+    .collect();
 
     // Sort the devices by sysnum so we get card0, card1 first and ignore the other 3D devices
     drivers.sort_by(|a, b| a.id.cmp(&b.id));
