@@ -28,7 +28,7 @@ pub enum DecodeError {
     AppID,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DesktopEntry<'a> {
     pub appid: &'a str,
     pub groups: Groups<'a>,
